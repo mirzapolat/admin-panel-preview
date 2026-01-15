@@ -1,36 +1,37 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Admin Panel
 
-## Getting Started
+Dashboard app for managing Botschafter (ambassadors), schools, and events. Built with Next.js and PocketBase. The UI is in German.
 
-First, run the development server:
+## Features
+- Botschafter: active/pending lists, verify action, advanced filters, bulk edit/delete, import/export.
+- Schulen: list with the same management features as Botschafter.
+- Events: list view and month calendar view, click rows/cards to open a full editor dialog.
+- Forms/Resources: placeholder pages ready for future CRUD.
+- Auth: PocketBase users collection with login/signup.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+## Tech Stack
+- Next.js 16 (App Router)
+- React 19
+- PocketBase
+- Tailwind CSS + Radix UI
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Local Setup
+1. Install dependencies:
+   `npm install`
+2. Start PocketBase (uses the bundled data directory):
+   `./pocketbase/pocketbase serve --dir pocketbase/pb_data`
+3. Create `.env.local`:
+   `NEXT_PUBLIC_POCKETBASE_URL=http://127.0.0.1:8090`
+4. Start the app:
+   `npm run dev`
+   Open `http://localhost:3000`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## PocketBase Collections
+- `users`: default PocketBase auth collection.
+- `members`: `name`, `email`, `phone`, `city`, `active` (bool), `identification` (number).
+- `schools`: `name`, `email`, `phone`, `city`, `active` (bool), `identification` (number).
+- `events`: `name`, `description`, `date` (date), `category`, `ambassadors` (relation -> `members`, multiple).
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Notes
+- Events can be managed in list or month calendar view.
+- The client-side auth guard uses `pb.authStore` to protect routes.
