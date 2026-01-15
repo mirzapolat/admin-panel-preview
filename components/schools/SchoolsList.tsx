@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { pb } from "@/lib/pocketbase";
 import { Button } from "@/components/ui/button";
 import {
@@ -23,6 +23,8 @@ import {
   Upload,
   ChevronUp,
   ChevronDown,
+  UserPlus,
+  X,
 } from "lucide-react";
 import {
   Dialog,
@@ -35,6 +37,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -56,23 +59,49 @@ import {
 type School = {
   id: string;
   name: string;
+  adress: string;
   email: string;
   phone: string;
   city: string;
+  correspondant: string;
+  ambassadors: string[];
+  last_contacted: string;
+  priority_score: number;
   active: boolean;
   collectionId: string;
   collectionName: string;
   created: string;
   updated: string;
-  identification: number;
+};
+
+type Ambassador = {
+  id: string;
+  name: string;
+  email: string;
+};
+
+type SchoolFormState = {
+  name: string;
+  adress: string;
+  email: string;
+  phone: string;
+  city: string;
+  correspondant: string;
+  ambassadors: string[];
+  last_contacted: string;
+  priority_score: string;
+  active: boolean;
 };
 
 type SortField =
-  | "identification"
   | "name"
+  | "adress"
   | "email"
   | "phone"
   | "city"
+  | "correspondant"
+  | "last_contacted"
+  | "priority_score"
   | "active"
   | "created"
   | "updated";
@@ -82,20 +111,33 @@ type SortDirection = "asc" | "desc";
 type FilterState = {
   active: "all" | "active" | "inactive";
   name: string;
+  adress: string;
   email: string;
   phone: string;
   city: string;
-  identificationMin: string;
-  identificationMax: string;
+  correspondant: string;
+  lastContactedFrom: string;
+  lastContactedTo: string;
+  priorityMin: string;
+  priorityMax: string;
   createdFrom: string;
   createdTo: string;
   updatedFrom: string;
   updatedTo: string;
 };
 
-type BulkField = "active" | "name" | "email" | "phone" | "city";
+type BulkField =
+  | "active"
+  | "name"
+  | "adress"
+  | "email"
+  | "phone"
+  | "city"
+  | "correspondant"
+  | "last_contacted"
+  | "priority_score";
 
-type ImportMode = "create" | "upsert_email" | "upsert_identification";
+type ImportMode = "create" | "upsert_email";
 
 type ExportScope = "filtered" | "selected" | "all";
 
@@ -108,11 +150,15 @@ type ImportSummary = {
 const defaultFilters: FilterState = {
   active: "all",
   name: "",
+  adress: "",
   email: "",
   phone: "",
   city: "",
-  identificationMin: "",
-  identificationMax: "",
+  correspondant: "",
+  lastContactedFrom: "",
+  lastContactedTo: "",
+  priorityMin: "",
+  priorityMax: "",
   createdFrom: "",
   createdTo: "",
   updatedFrom: "",
@@ -121,11 +167,15 @@ const defaultFilters: FilterState = {
 
 const exportFields = [
   "id",
-  "identification",
   "name",
+  "adress",
   "email",
   "phone",
   "city",
+  "correspondant",
+  "ambassadors",
+  "last_contacted",
+  "priority_score",
   "active",
   "created",
   "updated",
@@ -153,6 +203,15 @@ const parseBoolean = (value: unknown) => {
 
 const isNotFoundError = (error: any) =>
   error?.status === 404 || error?.data?.code === 404;
+
+const formatDateLabel = (value: string) => {
+  if (!value) return "-";
+  const normalized =
+    /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00` : value;
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString("de-DE");
+};
 
 const formatTimestamp = (value: string) => {
   const date = new Date(value);
@@ -245,12 +304,28 @@ const mapCsvRowsToRecords = (rows: string[][]) => {
 
   const headerMap: Record<string, string> = {
     id: "id",
-    identification: "identification",
-    memberid: "identification",
     name: "name",
     email: "email",
     phone: "phone",
     city: "city",
+    address: "adress",
+    adresse: "adress",
+    adress: "adress",
+    correspondant: "correspondant",
+    correspondent: "correspondant",
+    contact: "correspondant",
+    contactperson: "correspondant",
+    contact_person: "correspondant",
+    ambassador: "ambassadors",
+    ambassadors: "ambassadors",
+    botschafter: "ambassadors",
+    lastcontacted: "last_contacted",
+    lastcontacteddate: "last_contacted",
+    lastcontact: "last_contacted",
+    last_contacted: "last_contacted",
+    priority: "priority_score",
+    priorityscore: "priority_score",
+    priority_score: "priority_score",
     active: "active",
     isactive: "active",
   };
@@ -301,16 +376,25 @@ export function SchoolsList() {
   const [exportFormat, setExportFormat] = useState<"csv" | "json">("csv");
   const [exporting, setExporting] = useState(false);
 
+  const [ambassadorOptions, setAmbassadorOptions] = useState<Ambassador[]>([]);
+  const [ambassadorsLoading, setAmbassadorsLoading] = useState(true);
+  const [ambassadorSearch, setAmbassadorSearch] = useState("");
+  const [ambassadorPopoverOpen, setAmbassadorPopoverOpen] = useState(false);
+
   const selectAllRef = useRef<HTMLInputElement | null>(null);
 
   const activeFilterCount = [
     filters.active !== "all",
     Boolean(filters.name),
+    Boolean(filters.adress),
     Boolean(filters.email),
     Boolean(filters.phone),
     Boolean(filters.city),
-    Boolean(filters.identificationMin),
-    Boolean(filters.identificationMax),
+    Boolean(filters.correspondant),
+    Boolean(filters.lastContactedFrom),
+    Boolean(filters.lastContactedTo),
+    Boolean(filters.priorityMin),
+    Boolean(filters.priorityMax),
     Boolean(filters.createdFrom),
     Boolean(filters.createdTo),
     Boolean(filters.updatedFrom),
@@ -323,7 +407,7 @@ export function SchoolsList() {
     if (query.trim()) {
       const escapedQuery = escapeFilterValue(query.trim());
       filterParts.push(
-        `(name ~ "${escapedQuery}" || email ~ "${escapedQuery}" || phone ~ "${escapedQuery}" || city ~ "${escapedQuery}")`
+        `(name ~ "${escapedQuery}" || email ~ "${escapedQuery}" || phone ~ "${escapedQuery}" || city ~ "${escapedQuery}" || adress ~ "${escapedQuery}" || correspondant ~ "${escapedQuery}")`
       );
     }
 
@@ -333,6 +417,10 @@ export function SchoolsList() {
 
     if (state.name.trim()) {
       filterParts.push(`name ~ "${escapeFilterValue(state.name.trim())}"`);
+    }
+
+    if (state.adress.trim()) {
+      filterParts.push(`adress ~ "${escapeFilterValue(state.adress.trim())}"`);
     }
 
     if (state.email.trim()) {
@@ -347,14 +435,32 @@ export function SchoolsList() {
       filterParts.push(`city ~ "${escapeFilterValue(state.city.trim())}"`);
     }
 
-    const minId = Number(state.identificationMin);
-    if (!Number.isNaN(minId) && state.identificationMin.trim() !== "") {
-      filterParts.push(`identification >= ${minId}`);
+    if (state.correspondant.trim()) {
+      filterParts.push(
+        `correspondant ~ "${escapeFilterValue(state.correspondant.trim())}"`
+      );
     }
 
-    const maxId = Number(state.identificationMax);
-    if (!Number.isNaN(maxId) && state.identificationMax.trim() !== "") {
-      filterParts.push(`identification <= ${maxId}`);
+    const minPriority = Number(state.priorityMin);
+    if (!Number.isNaN(minPriority) && state.priorityMin.trim() !== "") {
+      filterParts.push(`priority_score >= ${minPriority}`);
+    }
+
+    const maxPriority = Number(state.priorityMax);
+    if (!Number.isNaN(maxPriority) && state.priorityMax.trim() !== "") {
+      filterParts.push(`priority_score <= ${maxPriority}`);
+    }
+
+    if (state.lastContactedFrom) {
+      filterParts.push(
+        `last_contacted >= "${toDateStart(state.lastContactedFrom)}"`
+      );
+    }
+
+    if (state.lastContactedTo) {
+      filterParts.push(
+        `last_contacted <= "${toDateEnd(state.lastContactedTo)}"`
+      );
     }
 
     if (state.createdFrom) {
@@ -391,9 +497,23 @@ export function SchoolsList() {
       setMembers(records.items);
       setSelectedIds([]);
     } catch (error) {
-      console.error("Error fetching members:", error);
+      console.error("Error fetching schools:", error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchAmbassadors = async () => {
+    setAmbassadorsLoading(true);
+    try {
+      const records = await pb.collection("members").getFullList<Ambassador>({
+        sort: "name",
+      });
+      setAmbassadorOptions(records);
+    } catch (error) {
+      console.error("Error fetching ambassadors:", error);
+    } finally {
+      setAmbassadorsLoading(false);
     }
   };
 
@@ -405,61 +525,101 @@ export function SchoolsList() {
   }, [searchQuery, filters, sortBy, sortDirection]);
 
   useEffect(() => {
+    fetchAmbassadors();
+  }, []);
+
+  useEffect(() => {
     if (!selectAllRef.current) return;
     const isIndeterminate =
       selectedIds.length > 0 && selectedIds.length < members.length;
     selectAllRef.current.indeterminate = isIndeterminate;
   }, [selectedIds, members.length]);
 
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<SchoolFormState>({
     name: "",
+    adress: "",
     email: "",
     phone: "",
     city: "",
+    correspondant: "",
+    ambassadors: [],
+    last_contacted: "",
+    priority_score: "",
     active: true,
   });
 
   const resetForm = () => {
     setFormData({
       name: "",
+      adress: "",
       email: "",
       phone: "",
       city: "",
+      correspondant: "",
+      ambassadors: [],
+      last_contacted: "",
+      priority_score: "",
       active: true,
     });
+    setAmbassadorSearch("");
+    setAmbassadorPopoverOpen(false);
     setEditingMember(null);
   };
 
+  const ambassadorsById = useMemo(() => {
+    return ambassadorOptions.reduce<Record<string, Ambassador>>((acc, member) => {
+      acc[member.id] = member;
+      return acc;
+    }, {});
+  }, [ambassadorOptions]);
+
+  const selectedAmbassadors = useMemo(() => {
+    return formData.ambassadors
+      .map((id) => ambassadorsById[id])
+      .filter(Boolean);
+  }, [ambassadorsById, formData.ambassadors]);
+
+  const availableAmbassadors = useMemo(() => {
+    const query = ambassadorSearch.trim().toLowerCase();
+    const candidates = ambassadorOptions.filter(
+      (member) => !formData.ambassadors.includes(member.id)
+    );
+    const filtered = query
+      ? candidates.filter((member) =>
+          `${member.name} ${member.email}`.toLowerCase().includes(query)
+        )
+      : candidates;
+    return filtered.slice(0, 8);
+  }, [ambassadorOptions, ambassadorSearch, formData.ambassadors]);
+
   const handleSave = async () => {
     try {
-      if (editingMember) {
-        await pb.collection("schools").update(editingMember.id, formData);
-      } else {
-        let nextId = 1;
-        try {
-          const lastMemberResult = await pb
-            .collection("schools")
-            .getList(1, 1, {
-              sort: "-identification",
-            });
-          if (lastMemberResult.items.length > 0) {
-            nextId = (lastMemberResult.items[0].identification || 0) + 1;
-          }
-        } catch (error) {
-          console.warn("Could not fetch last ID, defaulting to 1", error);
-        }
+      const priorityValue = formData.priority_score.trim();
+      const parsedPriority = Number(priorityValue);
+      const payload: Partial<School> = {
+        name: formData.name.trim(),
+        adress: formData.adress.trim(),
+        email: formData.email.trim(),
+        phone: formData.phone.trim(),
+        city: formData.city.trim(),
+        correspondant: formData.correspondant.trim(),
+        ambassadors: formData.ambassadors,
+        last_contacted: formData.last_contacted,
+        priority_score: Number.isNaN(parsedPriority) ? 0 : parsedPriority,
+        active: formData.active,
+      };
 
-        await pb.collection("schools").create({
-          ...formData,
-          identification: nextId,
-        });
+      if (editingMember) {
+        await pb.collection("schools").update(editingMember.id, payload);
+      } else {
+        await pb.collection("schools").create(payload);
       }
       setIsAddOpen(false);
       setEditingMember(null);
       resetForm();
       fetchMembers();
     } catch (error: any) {
-      console.error("Error saving member:", error);
+      console.error("Error saving school:", error);
       alert(`Schule konnte nicht gespeichert werden. Fehler: ${error.message}`);
     }
   };
@@ -470,7 +630,7 @@ export function SchoolsList() {
       await pb.collection("schools").delete(id);
       fetchMembers();
     } catch (error) {
-      console.error("Error deleting member:", error);
+      console.error("Error deleting school:", error);
     }
   };
 
@@ -489,12 +649,40 @@ export function SchoolsList() {
     setEditingMember(member);
     setFormData({
       name: member.name,
+      adress: member.adress || "",
       email: member.email,
       phone: member.phone,
       city: member.city,
+      correspondant: member.correspondant || "",
+      ambassadors: Array.isArray(member.ambassadors) ? member.ambassadors : [],
+      last_contacted: member.last_contacted
+        ? member.last_contacted.slice(0, 10)
+        : "",
+      priority_score:
+        member.priority_score !== undefined && member.priority_score !== null
+          ? String(member.priority_score)
+          : "",
       active: member.active,
     });
+    setAmbassadorSearch("");
+    setAmbassadorPopoverOpen(false);
     setIsAddOpen(true);
+  };
+
+  const addAmbassador = (id: string) => {
+    setFormData((prev) => ({
+      ...prev,
+      ambassadors: prev.ambassadors.includes(id)
+        ? prev.ambassadors
+        : [...prev.ambassadors, id],
+    }));
+  };
+
+  const removeAmbassador = (id: string) => {
+    setFormData((prev) => ({
+      ...prev,
+      ambassadors: prev.ambassadors.filter((item) => item !== id),
+    }));
   };
 
   const toggleSelectAll = (checked: boolean) => {
@@ -514,10 +702,19 @@ export function SchoolsList() {
   const handleBulkUpdate = async () => {
     if (selectedIds.length === 0) return;
     setBulkWorking(true);
-    const payload: Partial<School> =
-      bulkField === "active"
-        ? { active: bulkActiveValue === "true" }
-        : ({ [bulkField]: bulkValue } as Partial<School>);
+    let payload: Partial<School> = {};
+    if (bulkField === "active") {
+      payload = { active: bulkActiveValue === "true" };
+    } else if (bulkField === "priority_score") {
+      const parsedPriority = Number(bulkValue);
+      payload = {
+        priority_score: Number.isNaN(parsedPriority) ? 0 : parsedPriority,
+      };
+    } else if (bulkField === "last_contacted") {
+      payload = { last_contacted: bulkValue };
+    } else {
+      payload = { [bulkField]: bulkValue } as Partial<School>;
+    }
 
     try {
       for (const id of selectedIds) {
@@ -527,7 +724,7 @@ export function SchoolsList() {
       setBulkValue("");
       fetchMembers();
     } catch (error) {
-      console.error("Error bulk updating members:", error);
+      console.error("Error bulk updating schools:", error);
     } finally {
       setBulkWorking(false);
     }
@@ -548,7 +745,7 @@ export function SchoolsList() {
       }
       fetchMembers();
     } catch (error) {
-      console.error("Error bulk deleting members:", error);
+      console.error("Error bulk deleting schools:", error);
     } finally {
       setBulkWorking(false);
     }
@@ -578,6 +775,11 @@ export function SchoolsList() {
     const name = normalizeText(record.name);
     if (name) payload.name = name;
 
+    const adress = normalizeText(
+      record.adress ?? (record as Record<string, unknown>).address
+    );
+    if (adress) payload.adress = adress;
+
     const email = normalizeText(record.email);
     if (email) payload.email = email;
 
@@ -587,15 +789,42 @@ export function SchoolsList() {
     const city = normalizeText(record.city);
     if (city) payload.city = city;
 
-    if (record.active !== undefined && record.active !== "") {
-      payload.active = parseBoolean(record.active);
+    const correspondant = normalizeText(
+      record.correspondant ??
+        (record as Record<string, unknown>).correspondent ??
+        (record as Record<string, unknown>).contact_person ??
+        (record as Record<string, unknown>).contactPerson
+    );
+    if (correspondant) payload.correspondant = correspondant;
+
+    const ambassadorsValue =
+      record.ambassadors ?? (record as Record<string, unknown>).ambassador;
+    if (Array.isArray(ambassadorsValue)) {
+      payload.ambassadors = ambassadorsValue.map((value) => String(value));
+    } else if (typeof ambassadorsValue === "string") {
+      const parsed = ambassadorsValue
+        .split(/[;,]/)
+        .map((value) => value.trim())
+        .filter(Boolean);
+      if (parsed.length) payload.ambassadors = parsed;
     }
 
-    if (record.identification !== undefined && record.identification !== "") {
-      const parsedId = Number(record.identification);
-      if (!Number.isNaN(parsedId)) {
-        payload.identification = parsedId;
+    const lastContacted = normalizeText(
+      record.last_contacted ?? (record as Record<string, unknown>).lastContacted
+    );
+    if (lastContacted) payload.last_contacted = lastContacted;
+
+    const rawPriority =
+      record.priority_score ?? (record as Record<string, unknown>).priorityScore;
+    if (rawPriority !== undefined && rawPriority !== "") {
+      const parsedPriority = Number(rawPriority);
+      if (!Number.isNaN(parsedPriority)) {
+        payload.priority_score = parsedPriority;
       }
+    }
+
+    if (record.active !== undefined && record.active !== "") {
+      payload.active = parseBoolean(record.active);
     }
 
     return payload;
@@ -668,35 +897,8 @@ export function SchoolsList() {
             continue;
           }
 
-          if (importMode === "upsert_identification") {
-            const rawId = record.identification;
-            const parsedId = Number(rawId);
-            if (Number.isNaN(parsedId)) {
-              summary.failed += 1;
-              continue;
-            }
-            try {
-              const existing = await pb
-                .collection("schools")
-                .getFirstListItem(`identification = ${parsedId}`);
-              await pb.collection("schools").update(existing.id, payload);
-              summary.updated += 1;
-            } catch (error: any) {
-              if (isNotFoundError(error)) {
-                await pb.collection("schools").create({
-                  ...payload,
-                  identification: parsedId,
-                  active: payload.active ?? true,
-                });
-                summary.created += 1;
-              } else {
-                summary.failed += 1;
-              }
-            }
-            continue;
-          }
         } catch (error) {
-          console.error("Error importing member:", error);
+          console.error("Error importing school:", error);
           summary.failed += 1;
         }
       }
@@ -732,11 +934,15 @@ export function SchoolsList() {
 
       const rows = exportMembers.map((member) => ({
         id: member.id,
-        identification: member.identification,
         name: member.name,
+        adress: member.adress,
         email: member.email,
         phone: member.phone,
         city: member.city,
+        correspondant: member.correspondant,
+        ambassadors: member.ambassadors,
+        last_contacted: member.last_contacted,
+        priority_score: member.priority_score,
         active: member.active,
         created: member.created,
         updated: member.updated,
@@ -822,23 +1028,8 @@ export function SchoolsList() {
                     : "Details ausfuellen, um eine neue Schule zur Datenbank hinzuzufuegen."}
                 </DialogDescription>
               </DialogHeader>
-              <div className="grid gap-4 py-4">
-                {editingMember ? (
-                  <div className="grid gap-2">
-                    <label
-                      htmlFor="identification"
-                      className="text-sm font-medium"
-                    >
-                      Schul-ID
-                    </label>
-                    <Input
-                      id="identification"
-                      value={String(editingMember.identification)}
-                      disabled
-                    />
-                  </div>
-                ) : null}
-                <div className="grid gap-2">
+              <div className="grid gap-4 py-4 sm:grid-cols-2">
+                <div className="grid gap-2 sm:col-span-2">
                   <label htmlFor="name" className="text-sm font-medium">
                     Name
                   </label>
@@ -848,7 +1039,46 @@ export function SchoolsList() {
                     onChange={(e) =>
                       setFormData({ ...formData, name: e.target.value })
                     }
-                    placeholder="Max Mustermann"
+                    placeholder="Goethe-Gymnasium"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <label htmlFor="adress" className="text-sm font-medium">
+                    Adresse
+                  </label>
+                  <Input
+                    id="adress"
+                    value={formData.adress}
+                    onChange={(e) =>
+                      setFormData({ ...formData, adress: e.target.value })
+                    }
+                    placeholder="Musterstrasse 12"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <label htmlFor="city" className="text-sm font-medium">
+                    Stadt
+                  </label>
+                  <Input
+                    id="city"
+                    value={formData.city}
+                    onChange={(e) =>
+                      setFormData({ ...formData, city: e.target.value })
+                    }
+                    placeholder="Berlin"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <label htmlFor="correspondant" className="text-sm font-medium">
+                    Kontaktperson
+                  </label>
+                  <Input
+                    id="correspondant"
+                    value={formData.correspondant}
+                    onChange={(e) =>
+                      setFormData({ ...formData, correspondant: e.target.value })
+                    }
+                    placeholder="Anna Beispiel"
                   />
                 </div>
                 <div className="grid gap-2">
@@ -862,38 +1092,137 @@ export function SchoolsList() {
                     onChange={(e) =>
                       setFormData({ ...formData, email: e.target.value })
                     }
-                    placeholder="name@beispiel.de"
+                    placeholder="schule@beispiel.de"
                   />
                 </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="grid gap-2">
-                    <label htmlFor="phone" className="text-sm font-medium">
-                      Telefon
-                    </label>
-                    <Input
-                      id="phone"
-                      value={formData.phone}
-                      onChange={(e) =>
-                        setFormData({ ...formData, phone: e.target.value })
-                      }
-                      placeholder="030 1234567"
-                    />
-                  </div>
-                  <div className="grid gap-2">
-                    <label htmlFor="city" className="text-sm font-medium">
-                      Stadt
-                    </label>
-                    <Input
-                      id="city"
-                      value={formData.city}
-                      onChange={(e) =>
-                        setFormData({ ...formData, city: e.target.value })
-                      }
-                      placeholder="Berlin"
-                    />
+                <div className="grid gap-2">
+                  <label htmlFor="phone" className="text-sm font-medium">
+                    Telefon
+                  </label>
+                  <Input
+                    id="phone"
+                    value={formData.phone}
+                    onChange={(e) =>
+                      setFormData({ ...formData, phone: e.target.value })
+                    }
+                    placeholder="030 1234567"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <label htmlFor="last_contacted" className="text-sm font-medium">
+                    Letzter Kontakt
+                  </label>
+                  <Input
+                    id="last_contacted"
+                    type="date"
+                    value={formData.last_contacted}
+                    onChange={(e) =>
+                      setFormData({ ...formData, last_contacted: e.target.value })
+                    }
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <label htmlFor="priority_score" className="text-sm font-medium">
+                    Prioritaet
+                  </label>
+                  <Input
+                    id="priority_score"
+                    type="number"
+                    value={formData.priority_score}
+                    onChange={(e) =>
+                      setFormData({ ...formData, priority_score: e.target.value })
+                    }
+                    placeholder="1"
+                  />
+                </div>
+                <div className="grid gap-2 sm:col-span-2">
+                  <label className="text-sm font-medium">
+                    Zustaendige Botschafter
+                  </label>
+                  <Popover
+                    open={ambassadorPopoverOpen}
+                    onOpenChange={setAmbassadorPopoverOpen}
+                  >
+                    <PopoverTrigger asChild>
+                      <Input
+                        placeholder="Botschafter suchen und hinzufuegen"
+                        value={ambassadorSearch}
+                        onChange={(event) => {
+                          setAmbassadorSearch(event.target.value);
+                          setAmbassadorPopoverOpen(true);
+                        }}
+                        onFocus={() => setAmbassadorPopoverOpen(true)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" && availableAmbassadors.length) {
+                            event.preventDefault();
+                            addAmbassador(availableAmbassadors[0].id);
+                            setAmbassadorSearch("");
+                            setAmbassadorPopoverOpen(true);
+                          }
+                        }}
+                      />
+                    </PopoverTrigger>
+                    <PopoverContent className="w-[320px] p-2">
+                      {ambassadorsLoading ? (
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Lade Botschafter...
+                        </div>
+                      ) : availableAmbassadors.length ? (
+                        <div className="grid gap-1">
+                          {availableAmbassadors.map((member) => (
+                            <button
+                              key={member.id}
+                              type="button"
+                              onClick={() => {
+                                addAmbassador(member.id);
+                                setAmbassadorSearch("");
+                              }}
+                              className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted"
+                            >
+                              <UserPlus className="h-4 w-4 text-muted-foreground" />
+                              <div>
+                                <div className="font-medium">{member.name}</div>
+                                <div className="text-xs text-muted-foreground">
+                                  {member.email}
+                                </div>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-xs text-muted-foreground">
+                          Keine Botschafter gefunden.
+                        </div>
+                      )}
+                    </PopoverContent>
+                  </Popover>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedAmbassadors.length ? (
+                      selectedAmbassadors.map((member) => (
+                        <span
+                          key={member.id}
+                          className="inline-flex items-center gap-1 rounded-full border px-2 py-1 text-xs"
+                        >
+                          {member.name}
+                          <button
+                            type="button"
+                            className="rounded-full p-0.5 hover:bg-muted"
+                            onClick={() => removeAmbassador(member.id)}
+                            aria-label={`Botschafter ${member.name} entfernen`}
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </span>
+                      ))
+                    ) : (
+                      <span className="text-xs text-muted-foreground">
+                        Noch keine Botschafter zugewiesen.
+                      </span>
+                    )}
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 sm:col-span-2">
                   <input
                     type="checkbox"
                     id="active"
@@ -955,8 +1284,9 @@ export function SchoolsList() {
                 }}
               />
               <span className="text-xs text-muted-foreground">
-                Unterstuetzte Felder: name, email, phone, city, active,
-                identification.
+                Unterstuetzte Felder: name, adress, email, phone, city,
+                correspondant, ambassadors, last_contacted, priority_score,
+                active.
               </span>
             </div>
             <div className="grid gap-2">
@@ -976,9 +1306,6 @@ export function SchoolsList() {
                   <SelectItem value="create">Neue Eintraege erstellen</SelectItem>
                   <SelectItem value="upsert_email">
                     Upsert nach E-Mail
-                  </SelectItem>
-                  <SelectItem value="upsert_identification">
-                    Upsert nach ID
                   </SelectItem>
                 </SelectContent>
               </Select>
@@ -1114,11 +1441,14 @@ export function SchoolsList() {
               </div>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="identification">Schul-ID</SelectItem>
               <SelectItem value="name">Name</SelectItem>
+              <SelectItem value="adress">Adresse</SelectItem>
+              <SelectItem value="city">Stadt</SelectItem>
+              <SelectItem value="correspondant">Kontaktperson</SelectItem>
               <SelectItem value="email">E-Mail</SelectItem>
               <SelectItem value="phone">Telefon</SelectItem>
-              <SelectItem value="city">Stadt</SelectItem>
+              <SelectItem value="priority_score">Prioritaet</SelectItem>
+              <SelectItem value="last_contacted">Letzter Kontakt</SelectItem>
               <SelectItem value="active">Status</SelectItem>
               <SelectItem value="created">Erstellt</SelectItem>
               <SelectItem value="updated">Zuletzt bearbeitet</SelectItem>
@@ -1185,6 +1515,21 @@ export function SchoolsList() {
                   />
                 </div>
                 <div className="grid gap-2">
+                  <label htmlFor="filter-adress" className="text-sm font-medium">
+                    Adresse enthaelt
+                  </label>
+                  <Input
+                    id="filter-adress"
+                    value={filtersDraft.adress}
+                    onChange={(event) =>
+                      setFiltersDraft((prev) => ({
+                        ...prev,
+                        adress: event.target.value,
+                      }))
+                    }
+                  />
+                </div>
+                <div className="grid gap-2">
                   <label htmlFor="filter-email" className="text-sm font-medium">
                     E-Mail enthaelt
                   </label>
@@ -1230,6 +1575,24 @@ export function SchoolsList() {
                   />
                 </div>
                 <div className="grid gap-2">
+                  <label
+                    htmlFor="filter-correspondant"
+                    className="text-sm font-medium"
+                  >
+                    Kontaktperson enthaelt
+                  </label>
+                  <Input
+                    id="filter-correspondant"
+                    value={filtersDraft.correspondant}
+                    onChange={(event) =>
+                      setFiltersDraft((prev) => ({
+                        ...prev,
+                        correspondant: event.target.value,
+                      }))
+                    }
+                  />
+                </div>
+                <div className="grid gap-2">
                   <label htmlFor="filter-active" className="text-sm font-medium">
                     Aktiv-Status
                   </label>
@@ -1252,41 +1615,55 @@ export function SchoolsList() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="grid gap-2">
-                    <label
-                      htmlFor="filter-id-min"
-                      className="text-sm font-medium"
-                    >
-                      ID min
-                    </label>
+                <div className="grid gap-2">
+                  <label className="text-sm font-medium">
+                    Letzter Kontakt Zeitraum
+                  </label>
+                  <div className="grid grid-cols-2 gap-4">
                     <Input
-                      id="filter-id-min"
-                      type="number"
-                      value={filtersDraft.identificationMin}
+                      type="date"
+                      value={filtersDraft.lastContactedFrom}
                       onChange={(event) =>
                         setFiltersDraft((prev) => ({
                           ...prev,
-                          identificationMin: event.target.value,
+                          lastContactedFrom: event.target.value,
+                        }))
+                      }
+                    />
+                    <Input
+                      type="date"
+                      value={filtersDraft.lastContactedTo}
+                      onChange={(event) =>
+                        setFiltersDraft((prev) => ({
+                          ...prev,
+                          lastContactedTo: event.target.value,
                         }))
                       }
                     />
                   </div>
-                  <div className="grid gap-2">
-                    <label
-                      htmlFor="filter-id-max"
-                      className="text-sm font-medium"
-                    >
-                      ID max
-                    </label>
+                </div>
+                <div className="grid gap-2">
+                  <label className="text-sm font-medium">Prioritaet Bereich</label>
+                  <div className="grid grid-cols-2 gap-4">
                     <Input
-                      id="filter-id-max"
                       type="number"
-                      value={filtersDraft.identificationMax}
+                      placeholder="Min"
+                      value={filtersDraft.priorityMin}
                       onChange={(event) =>
                         setFiltersDraft((prev) => ({
                           ...prev,
-                          identificationMax: event.target.value,
+                          priorityMin: event.target.value,
+                        }))
+                      }
+                    />
+                    <Input
+                      type="number"
+                      placeholder="Max"
+                      value={filtersDraft.priorityMax}
+                      onChange={(event) =>
+                        setFiltersDraft((prev) => ({
+                          ...prev,
+                          priorityMax: event.target.value,
                         }))
                       }
                     />
@@ -1357,7 +1734,7 @@ export function SchoolsList() {
         <div className="relative w-full md:flex-1">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="Suche Name, E-Mail, Telefon, Stadt..."
+            placeholder="Suche Name, Adresse, Kontaktperson, E-Mail, Telefon, Stadt..."
             className="pl-8"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
@@ -1417,9 +1794,13 @@ export function SchoolsList() {
                 <SelectContent>
                   <SelectItem value="active">Aktiv-Status</SelectItem>
                   <SelectItem value="name">Name</SelectItem>
+                  <SelectItem value="adress">Adresse</SelectItem>
+                  <SelectItem value="city">Stadt</SelectItem>
+                  <SelectItem value="correspondant">Kontaktperson</SelectItem>
                   <SelectItem value="email">E-Mail</SelectItem>
                   <SelectItem value="phone">Telefon</SelectItem>
-                  <SelectItem value="city">Stadt</SelectItem>
+                  <SelectItem value="last_contacted">Letzter Kontakt</SelectItem>
+                  <SelectItem value="priority_score">Prioritaet</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -1444,10 +1825,21 @@ export function SchoolsList() {
             ) : (
               <div className="grid gap-2">
                 <label htmlFor="bulk-value" className="text-sm font-medium">
-                  Neuer Wert
+                  {bulkField === "last_contacted"
+                    ? "Datum"
+                    : bulkField === "priority_score"
+                      ? "Prioritaet"
+                      : "Neuer Wert"}
                 </label>
                 <Input
                   id="bulk-value"
+                  type={
+                    bulkField === "priority_score"
+                      ? "number"
+                      : bulkField === "last_contacted"
+                        ? "date"
+                        : "text"
+                  }
                   value={bulkValue}
                   onChange={(event) => setBulkValue(event.target.value)}
                 />
@@ -1472,7 +1864,7 @@ export function SchoolsList() {
       </Dialog>
 
       <div className="rounded-md border bg-card overflow-x-auto">
-        <Table className="min-w-[1000px]">
+        <Table className="min-w-[1400px]">
           <TableHeader>
             <TableRow>
               <TableHead className="w-[40px]">
@@ -1487,14 +1879,14 @@ export function SchoolsList() {
                   aria-label="Alle Schulen auswaehlen"
                 />
               </TableHead>
-              <TableHead className="w-[90px]">
+              <TableHead>
                 <button
                   type="button"
-                  onClick={() => handleSortChange("identification")}
+                  onClick={() => handleSortChange("name")}
                   className="flex items-center gap-1"
                 >
-                  ID
-                  {sortBy === "identification" ? (
+                  Name
+                  {sortBy === "name" ? (
                     sortDirection === "asc" ? (
                       <ChevronUp className="h-3 w-3" />
                     ) : (
@@ -1506,11 +1898,43 @@ export function SchoolsList() {
               <TableHead>
                 <button
                   type="button"
-                  onClick={() => handleSortChange("name")}
+                  onClick={() => handleSortChange("adress")}
                   className="flex items-center gap-1"
                 >
-                  Name
-                  {sortBy === "name" ? (
+                  Adresse
+                  {sortBy === "adress" ? (
+                    sortDirection === "asc" ? (
+                      <ChevronUp className="h-3 w-3" />
+                    ) : (
+                      <ChevronDown className="h-3 w-3" />
+                    )
+                  ) : null}
+                </button>
+              </TableHead>
+              <TableHead>
+                <button
+                  type="button"
+                  onClick={() => handleSortChange("city")}
+                  className="flex items-center gap-1"
+                >
+                  Stadt
+                  {sortBy === "city" ? (
+                    sortDirection === "asc" ? (
+                      <ChevronUp className="h-3 w-3" />
+                    ) : (
+                      <ChevronDown className="h-3 w-3" />
+                    )
+                  ) : null}
+                </button>
+              </TableHead>
+              <TableHead>
+                <button
+                  type="button"
+                  onClick={() => handleSortChange("correspondant")}
+                  className="flex items-center gap-1"
+                >
+                  Kontaktperson
+                  {sortBy === "correspondant" ? (
                     sortDirection === "asc" ? (
                       <ChevronUp className="h-3 w-3" />
                     ) : (
@@ -1551,14 +1975,31 @@ export function SchoolsList() {
                   ) : null}
                 </button>
               </TableHead>
+              <TableHead>Botschafter</TableHead>
               <TableHead>
                 <button
                   type="button"
-                  onClick={() => handleSortChange("city")}
+                  onClick={() => handleSortChange("last_contacted")}
                   className="flex items-center gap-1"
                 >
-                  Stadt
-                  {sortBy === "city" ? (
+                  Letzter Kontakt
+                  {sortBy === "last_contacted" ? (
+                    sortDirection === "asc" ? (
+                      <ChevronUp className="h-3 w-3" />
+                    ) : (
+                      <ChevronDown className="h-3 w-3" />
+                    )
+                  ) : null}
+                </button>
+              </TableHead>
+              <TableHead>
+                <button
+                  type="button"
+                  onClick={() => handleSortChange("priority_score")}
+                  className="flex items-center gap-1"
+                >
+                  Prioritaet
+                  {sortBy === "priority_score" ? (
                     sortDirection === "asc" ? (
                       <ChevronUp className="h-3 w-3" />
                     ) : (
@@ -1621,7 +2062,7 @@ export function SchoolsList() {
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={10} className="h-24 text-center">
+                <TableCell colSpan={14} className="h-24 text-center">
                   <div className="flex justify-center items-center h-full">
                     <Loader2 className="h-6 w-6 animate-spin" />
                   </div>
@@ -1629,7 +2070,7 @@ export function SchoolsList() {
               </TableRow>
             ) : members.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={10} className="h-24 text-center">
+                <TableCell colSpan={14} className="h-24 text-center">
                   Keine Schulen gefunden, die deinen Kriterien entsprechen.
                 </TableCell>
               </TableRow>
@@ -1637,6 +2078,18 @@ export function SchoolsList() {
               members.map((member) => {
                 const created = formatTimestamp(member.created);
                 const updated = formatTimestamp(member.updated);
+                const ambassadorIds = Array.isArray(member.ambassadors)
+                  ? member.ambassadors
+                  : [];
+                const ambassadorNames = ambassadorIds
+                  .map((id) => ambassadorsById[id]?.name)
+                  .filter(Boolean);
+                const ambassadorLabel =
+                  ambassadorNames.length > 2
+                    ? `${ambassadorNames.slice(0, 2).join(", ")} +${
+                        ambassadorNames.length - 2
+                      }`
+                    : ambassadorNames.join(", ");
 
                 return (
                   <TableRow key={member.id}>
@@ -1649,15 +2102,35 @@ export function SchoolsList() {
                         aria-label={`Schule ${member.name} auswaehlen`}
                       />
                     </TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground w-[90px]">
-                      #{member.identification}
-                    </TableCell>
                     <TableCell className="font-medium">
                       {member.name}
                     </TableCell>
+                    <TableCell className="text-sm">
+                      {member.adress || "-"}
+                    </TableCell>
+                    <TableCell className="text-sm">{member.city}</TableCell>
+                    <TableCell className="text-sm">
+                      {member.correspondant || "-"}
+                    </TableCell>
                     <TableCell className="text-sm">{member.email}</TableCell>
                     <TableCell className="text-sm">{member.phone}</TableCell>
-                    <TableCell className="text-sm">{member.city}</TableCell>
+                    <TableCell className="text-sm">
+                      {ambassadorsLoading ? (
+                        <span className="text-xs text-muted-foreground">
+                          Lade...
+                        </span>
+                      ) : ambassadorLabel ? (
+                        ambassadorLabel
+                      ) : (
+                        "-"
+                      )}
+                    </TableCell>
+                    <TableCell className="text-sm">
+                      {formatDateLabel(member.last_contacted)}
+                    </TableCell>
+                    <TableCell className="text-sm">
+                      {member.priority_score ?? "-"}
+                    </TableCell>
                     <TableCell>
                       <button
                         type="button"
