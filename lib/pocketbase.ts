@@ -1,8 +1,7 @@
 import PocketBase from "pocketbase";
 
-// Use environment variable or default to localhost
-const PB_URL =
-  process.env.NEXT_PUBLIC_POCKETBASE_URL || "http://pb1.mirzapolat.com/";
+// Use environment variable or default to the Next.js proxy.
+const PB_URL = process.env.NEXT_PUBLIC_POCKETBASE_URL || "/api/pb";
 
 export const pb = new PocketBase(PB_URL);
 
