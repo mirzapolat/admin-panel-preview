@@ -2,7 +2,7 @@ import PocketBase from "pocketbase";
 
 // Use environment variable or default to localhost
 const PB_URL =
-  process.env.NEXT_PUBLIC_POCKETBASE_URL || "https://pb1.mirzapolat.com";
+  process.env.NEXT_PUBLIC_POCKETBASE_URL;
 
 export const pb = new PocketBase(PB_URL);
 
