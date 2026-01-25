@@ -39,7 +39,7 @@ export default function DashboardLayout({
                    <Sidebar className="w-full border-none" />
                 </SheetContent>
               </Sheet>
-              <h1 className="font-bold text-lg">Admin Panel</h1>
+              <h1 className="font-bold text-lg">Botschafter Panel</h1>
            </div>
           <div className="h-full p-8">{children}</div>
         </main>

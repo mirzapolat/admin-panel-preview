@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { pb } from "@/lib/pocketbase";
+import { supabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
@@ -35,22 +35,27 @@ export default function LoginPage() {
     setError("");
 
     try {
-      await pb.collection("users").authWithPassword(email, password);
-      // If login successful, we proceed.
-      // Mock 2FA step if needed, or go straight to dashboard.
-      // For now, let's keep the mock 2FA step as originally requested, or skip it for better UX if not enforced.
-      // But the user updated requirement was "Allow signing up". 
-      // Let's assume standard flow: Login -> Dashboard. 
-      // User can enable 2FA in settings. If enabled (mock), we show 2FA.
-      // Since 2FA is mock, let's skip it unless we persist a flag. 
-      // Based on original request "login page with code 2fa leads to a dashboard", let's keep it but maybe only if a flag is set?
-      // For simplicity and standard auth flow, I'll go straight to dashboard unless 2FA is implied.
-      
-      router.push("/members/active");
+      const { data, error: authError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (authError) throw authError;
+
+      // Update user metadata with name if needed
+      if (data.user) {
+        const { error: updateError } = await supabase.auth.updateUser({
+          data: { name: data.user.user_metadata?.name || name }
+        });
+        if (updateError) console.error("Error updating user metadata:", updateError);
+      }
+
+      // Use window.location.href instead of router.push to ensure cookies are synced
+      // and middleware can properly detect the session
+      window.location.href = "/members/active";
     } catch (err: any) {
       console.error("Login failed:", err);
       setError("Ungueltige E-Mail oder Passwort.");
-    } finally {
       setLoading(false);
     }
   };
@@ -74,24 +79,37 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-        // Create user
-        await pb.collection("users").create({
+        // Create user with Supabase
+        const { data, error: signUpError } = await supabase.auth.signUp({
             email,
             password,
-            passwordConfirm,
-            name,
+            options: {
+              data: {
+                name: name,
+              }
+            }
         });
 
-        // Authenticate after create
-        await pb.collection("users").authWithPassword(email, password);
-        
-        router.push("/members/active");
+        if (signUpError) throw signUpError;
+
+        // If email confirmation is required, show message
+        if (data.user && !data.session) {
+          setError("Bitte bestaetige deine E-Mail-Adresse, bevor du dich anmeldest.");
+          setLoading(false);
+          return;
+        }
+
+        // If auto-confirm is enabled, sign in automatically
+        if (data.session) {
+          // Use window.location.href instead of router.push to ensure cookies are synced
+          window.location.href = "/members/active";
+        }
     } catch (err: any) {
         console.error("Signup failed:", err);
         setError(
           err.message ||
             "Konto konnte nicht erstellt werden. E-Mail ist moeglicherweise bereits vergeben."
-        ); // PB often returns readable errors
+        );
     } finally {
         setLoading(false);
     }

@@ -1,0 +1,16 @@
+{
+  "name": "Botschafter Panel",
+  "short_name": "Botschafter",
+  "description": "Admin Panel für Botschafter Verwaltung",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#2563eb",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

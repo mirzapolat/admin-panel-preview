@@ -14,8 +14,12 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Admin Panel",
-  description: "Admin Panel fuer Kord",
+  title: "Botschafter Panel",
+  description: "Admin Panel für Botschafter Verwaltung",
+  icons: {
+    icon: "/icon.svg",
+    apple: "/apple-icon.svg",
+  },
 };
 
 export default function RootLayout({

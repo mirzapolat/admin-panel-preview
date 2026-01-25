@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { pb } from "@/lib/pocketbase";
+import { supabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -190,10 +190,12 @@ export function EventsBoard() {
   const fetchEvents = async () => {
     setLoading(true);
     try {
-      const records = await pb.collection("events").getFullList<EventRecord>({
-        sort: "date",
-      });
-      setEvents(records);
+      const { data, error } = await supabase
+        .from("events")
+        .select("*")
+        .order("date", { ascending: true });
+      if (error) throw error;
+      setEvents((data as EventRecord[]) || []);
     } catch (error) {
       console.error("Error fetching events:", error);
     } finally {
@@ -204,10 +206,12 @@ export function EventsBoard() {
   const fetchMembers = async () => {
     setMembersLoading(true);
     try {
-      const records = await pb.collection("members").getFullList<Member>({
-        sort: "name",
-      });
-      setMembers(records);
+      const { data, error } = await supabase
+        .from("members")
+        .select("*")
+        .order("name", { ascending: true });
+      if (error) throw error;
+      setMembers((data as Member[]) || []);
     } catch (error) {
       console.error("Error fetching members:", error);
     } finally {
@@ -259,9 +263,14 @@ export function EventsBoard() {
       };
 
       if (editingEvent) {
-        await pb.collection("events").update(editingEvent.id, payload);
+        const { error } = await supabase
+          .from("events")
+          .update(payload)
+          .eq("id", editingEvent.id);
+        if (error) throw error;
       } else {
-        await pb.collection("events").create(payload);
+        const { error } = await supabase.from("events").insert(payload);
+        if (error) throw error;
       }
       setDialogOpen(false);
       setEditingEvent(null);
@@ -277,7 +286,11 @@ export function EventsBoard() {
     if (!editingEvent) return;
     if (!confirm("Moechtest du dieses Event wirklich loeschen?")) return;
     try {
-      await pb.collection("events").delete(editingEvent.id);
+      const { error } = await supabase
+        .from("events")
+        .delete()
+        .eq("id", editingEvent.id);
+      if (error) throw error;
       setDialogOpen(false);
       setEditingEvent(null);
       fetchEvents();

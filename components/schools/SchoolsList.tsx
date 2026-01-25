@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { pb } from "@/lib/pocketbase";
+import { supabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -202,7 +202,7 @@ const parseBoolean = (value: unknown) => {
 };
 
 const isNotFoundError = (error: any) =>
-  error?.status === 404 || error?.data?.code === 404;
+  error?.code === "PGRST116" || error?.status === 404;
 
 const formatDateLabel = (value: string) => {
   if (!value) return "-";
@@ -401,100 +401,91 @@ export function SchoolsList() {
     Boolean(filters.updatedTo),
   ].filter(Boolean).length;
 
-  const buildFilterString = (state: FilterState, query: string) => {
-    const filterParts: string[] = [];
-
-    if (query.trim()) {
-      const escapedQuery = escapeFilterValue(query.trim());
-      filterParts.push(
-        `(name ~ "${escapedQuery}" || email ~ "${escapedQuery}" || phone ~ "${escapedQuery}" || city ~ "${escapedQuery}" || adress ~ "${escapedQuery}" || correspondant ~ "${escapedQuery}")`
-      );
-    }
-
-    if (state.active !== "all") {
-      filterParts.push(`active = ${state.active === "active"}`);
-    }
-
-    if (state.name.trim()) {
-      filterParts.push(`name ~ "${escapeFilterValue(state.name.trim())}"`);
-    }
-
-    if (state.adress.trim()) {
-      filterParts.push(`adress ~ "${escapeFilterValue(state.adress.trim())}"`);
-    }
-
-    if (state.email.trim()) {
-      filterParts.push(`email ~ "${escapeFilterValue(state.email.trim())}"`);
-    }
-
-    if (state.phone.trim()) {
-      filterParts.push(`phone ~ "${escapeFilterValue(state.phone.trim())}"`);
-    }
-
-    if (state.city.trim()) {
-      filterParts.push(`city ~ "${escapeFilterValue(state.city.trim())}"`);
-    }
-
-    if (state.correspondant.trim()) {
-      filterParts.push(
-        `correspondant ~ "${escapeFilterValue(state.correspondant.trim())}"`
-      );
-    }
-
-    const minPriority = Number(state.priorityMin);
-    if (!Number.isNaN(minPriority) && state.priorityMin.trim() !== "") {
-      filterParts.push(`priority_score >= ${minPriority}`);
-    }
-
-    const maxPriority = Number(state.priorityMax);
-    if (!Number.isNaN(maxPriority) && state.priorityMax.trim() !== "") {
-      filterParts.push(`priority_score <= ${maxPriority}`);
-    }
-
-    if (state.lastContactedFrom) {
-      filterParts.push(
-        `last_contacted >= "${toDateStart(state.lastContactedFrom)}"`
-      );
-    }
-
-    if (state.lastContactedTo) {
-      filterParts.push(
-        `last_contacted <= "${toDateEnd(state.lastContactedTo)}"`
-      );
-    }
-
-    if (state.createdFrom) {
-      filterParts.push(`created >= "${toDateStart(state.createdFrom)}"`);
-    }
-
-    if (state.createdTo) {
-      filterParts.push(`created <= "${toDateEnd(state.createdTo)}"`);
-    }
-
-    if (state.updatedFrom) {
-      filterParts.push(`updated >= "${toDateStart(state.updatedFrom)}"`);
-    }
-
-    if (state.updatedTo) {
-      filterParts.push(`updated <= "${toDateEnd(state.updatedTo)}"`);
-    }
-
-    return filterParts.join(" && ");
-  };
-
-  const buildSortString = () =>
-    sortDirection === "desc" ? `-${sortBy}` : sortBy;
-
   const fetchMembers = async () => {
     setLoading(true);
     try {
-      const filterString = buildFilterString(filters, searchQuery);
-      const sortString = buildSortString();
-      const records = await pb.collection("schools").getList<School>(1, 50, {
-        sort: sortString,
-        filter: filterString,
-      });
-      setMembers(records.items);
+      let query = supabase.from("schools").select("*");
+
+      // Apply search query
+      if (searchQuery.trim()) {
+        query = query.or(
+          `name.ilike.%${searchQuery.trim()}%,email.ilike.%${searchQuery.trim()}%,phone.ilike.%${searchQuery.trim()}%,city.ilike.%${searchQuery.trim()}%,adress.ilike.%${searchQuery.trim()}%,correspondant.ilike.%${searchQuery.trim()}%`
+        );
+      }
+
+      // Apply filters
+      if (filters.active !== "all") {
+        query = query.eq("active", filters.active === "active");
+      }
+
+      if (filters.name.trim()) {
+        query = query.ilike("name", `%${filters.name.trim()}%`);
+      }
+
+      if (filters.adress.trim()) {
+        query = query.ilike("adress", `%${filters.adress.trim()}%`);
+      }
+
+      if (filters.email.trim()) {
+        query = query.ilike("email", `%${filters.email.trim()}%`);
+      }
+
+      if (filters.phone.trim()) {
+        query = query.ilike("phone", `%${filters.phone.trim()}%`);
+      }
+
+      if (filters.city.trim()) {
+        query = query.ilike("city", `%${filters.city.trim()}%`);
+      }
+
+      if (filters.correspondant.trim()) {
+        query = query.ilike("correspondant", `%${filters.correspondant.trim()}%`);
+      }
+
+      const minPriority = Number(filters.priorityMin);
+      if (!Number.isNaN(minPriority) && filters.priorityMin.trim() !== "") {
+        query = query.gte("priority_score", minPriority);
+      }
+
+      const maxPriority = Number(filters.priorityMax);
+      if (!Number.isNaN(maxPriority) && filters.priorityMax.trim() !== "") {
+        query = query.lte("priority_score", maxPriority);
+      }
+
+      if (filters.lastContactedFrom) {
+        query = query.gte("last_contacted", toDateStart(filters.lastContactedFrom));
+      }
+
+      if (filters.lastContactedTo) {
+        query = query.lte("last_contacted", toDateEnd(filters.lastContactedTo));
+      }
+
+      if (filters.createdFrom) {
+        query = query.gte("created", toDateStart(filters.createdFrom));
+      }
+
+      if (filters.createdTo) {
+        query = query.lte("created", toDateEnd(filters.createdTo));
+      }
+
+      if (filters.updatedFrom) {
+        query = query.gte("updated", toDateStart(filters.updatedFrom));
+      }
+
+      if (filters.updatedTo) {
+        query = query.lte("updated", toDateEnd(filters.updatedTo));
+      }
+
+      // Apply sorting
+      query = query.order(sortBy, { ascending: sortDirection === "asc" });
+
+      // Apply pagination
+      query = query.range(0, 49);
+
+      const { data, error } = await query;
+
+      if (error) throw error;
+      setMembers((data as School[]) || []);
       setSelectedIds([]);
     } catch (error) {
       console.error("Error fetching schools:", error);
@@ -506,10 +497,12 @@ export function SchoolsList() {
   const fetchAmbassadors = async () => {
     setAmbassadorsLoading(true);
     try {
-      const records = await pb.collection("members").getFullList<Ambassador>({
-        sort: "name",
-      });
-      setAmbassadorOptions(records);
+      const { data, error } = await supabase
+        .from("members")
+        .select("*")
+        .order("name", { ascending: true });
+      if (error) throw error;
+      setAmbassadorOptions((data as Ambassador[]) || []);
     } catch (error) {
       console.error("Error fetching ambassadors:", error);
     } finally {
@@ -610,9 +603,14 @@ export function SchoolsList() {
       };
 
       if (editingMember) {
-        await pb.collection("schools").update(editingMember.id, payload);
+        const { error } = await supabase
+          .from("schools")
+          .update(payload)
+          .eq("id", editingMember.id);
+        if (error) throw error;
       } else {
-        await pb.collection("schools").create(payload);
+        const { error } = await supabase.from("schools").insert(payload);
+        if (error) throw error;
       }
       setIsAddOpen(false);
       setEditingMember(null);
@@ -627,7 +625,8 @@ export function SchoolsList() {
   const handleDelete = async (id: string) => {
     if (!confirm("Moechtest du diese Schule wirklich loeschen?")) return;
     try {
-      await pb.collection("schools").delete(id);
+      const { error } = await supabase.from("schools").delete().eq("id", id);
+      if (error) throw error;
       fetchMembers();
     } catch (error) {
       console.error("Error deleting school:", error);
@@ -636,9 +635,11 @@ export function SchoolsList() {
 
   const handleToggleActive = async (member: School) => {
     try {
-      await pb
-        .collection("schools")
-        .update(member.id, { active: !member.active });
+      const { error } = await supabase
+        .from("schools")
+        .update({ active: !member.active })
+        .eq("id", member.id);
+      if (error) throw error;
       fetchMembers();
     } catch (error) {
       console.error("Error updating status:", error);
@@ -717,9 +718,11 @@ export function SchoolsList() {
     }
 
     try {
-      for (const id of selectedIds) {
-        await pb.collection("schools").update(id, payload);
-      }
+      const { error } = await supabase
+        .from("schools")
+        .update(payload)
+        .in("id", selectedIds);
+      if (error) throw error;
       setIsBulkEditOpen(false);
       setBulkValue("");
       fetchMembers();
@@ -740,9 +743,11 @@ export function SchoolsList() {
       return;
     setBulkWorking(true);
     try {
-      for (const id of selectedIds) {
-        await pb.collection("schools").delete(id);
-      }
+      const { error } = await supabase
+        .from("schools")
+        .delete()
+        .in("id", selectedIds);
+      if (error) throw error;
       fetchMembers();
     } catch (error) {
       console.error("Error bulk deleting schools:", error);
@@ -862,10 +867,11 @@ export function SchoolsList() {
 
         try {
           if (importMode === "create") {
-            await pb.collection("schools").create({
+            const { error } = await supabase.from("schools").insert({
               ...payload,
               active: payload.active ?? true,
             });
+            if (error) throw error;
             summary.created += 1;
             continue;
           }
@@ -876,22 +882,38 @@ export function SchoolsList() {
               summary.failed += 1;
               continue;
             }
-            try {
-              const existing = await pb
-                .collection("schools")
-                .getFirstListItem(`email = "${escapeFilterValue(email)}"`);
-              await pb.collection("schools").update(existing.id, payload);
-              summary.updated += 1;
-            } catch (error: any) {
-              if (isNotFoundError(error)) {
-                await pb.collection("schools").create({
-                  ...payload,
-                  email,
-                  active: payload.active ?? true,
-                });
-                summary.created += 1;
-              } else {
+            const { data: existingData, error: fetchError } = await supabase
+              .from("schools")
+              .select("id")
+              .eq("email", email)
+              .limit(1)
+              .single();
+            
+            if (fetchError && fetchError.code !== "PGRST116") {
+              summary.failed += 1;
+              continue;
+            }
+
+            if (existingData) {
+              const { error } = await supabase
+                .from("schools")
+                .update(payload)
+                .eq("id", existingData.id);
+              if (error) {
                 summary.failed += 1;
+              } else {
+                summary.updated += 1;
+              }
+            } else {
+              const { error } = await supabase.from("schools").insert({
+                ...payload,
+                email,
+                active: payload.active ?? true,
+              });
+              if (error) {
+                summary.failed += 1;
+              } else {
+                summary.created += 1;
               }
             }
             continue;
@@ -921,15 +943,86 @@ export function SchoolsList() {
         exportMembers = members.filter((member) =>
           selectedIds.includes(member.id)
         );
-      } else if (exportScope === "filtered") {
-        exportMembers = await pb.collection("schools").getFullList<School>({
-          filter: buildFilterString(filters, searchQuery),
-          sort: buildSortString(),
-        });
       } else {
-        exportMembers = await pb.collection("schools").getFullList<School>({
-          sort: buildSortString(),
-        });
+        let query = supabase.from("schools").select("*");
+
+        // Apply filters for filtered scope
+        if (exportScope === "filtered") {
+          if (searchQuery.trim()) {
+            query = query.or(
+              `name.ilike.%${searchQuery.trim()}%,email.ilike.%${searchQuery.trim()}%,phone.ilike.%${searchQuery.trim()}%,city.ilike.%${searchQuery.trim()}%,adress.ilike.%${searchQuery.trim()}%,correspondant.ilike.%${searchQuery.trim()}%`
+            );
+          }
+
+          if (filters.active !== "all") {
+            query = query.eq("active", filters.active === "active");
+          }
+
+          if (filters.name.trim()) {
+            query = query.ilike("name", `%${filters.name.trim()}%`);
+          }
+
+          if (filters.adress.trim()) {
+            query = query.ilike("adress", `%${filters.adress.trim()}%`);
+          }
+
+          if (filters.email.trim()) {
+            query = query.ilike("email", `%${filters.email.trim()}%`);
+          }
+
+          if (filters.phone.trim()) {
+            query = query.ilike("phone", `%${filters.phone.trim()}%`);
+          }
+
+          if (filters.city.trim()) {
+            query = query.ilike("city", `%${filters.city.trim()}%`);
+          }
+
+          if (filters.correspondant.trim()) {
+            query = query.ilike("correspondant", `%${filters.correspondant.trim()}%`);
+          }
+
+          const minPriority = Number(filters.priorityMin);
+          if (!Number.isNaN(minPriority) && filters.priorityMin.trim() !== "") {
+            query = query.gte("priority_score", minPriority);
+          }
+
+          const maxPriority = Number(filters.priorityMax);
+          if (!Number.isNaN(maxPriority) && filters.priorityMax.trim() !== "") {
+            query = query.lte("priority_score", maxPriority);
+          }
+
+          if (filters.lastContactedFrom) {
+            query = query.gte("last_contacted", toDateStart(filters.lastContactedFrom));
+          }
+
+          if (filters.lastContactedTo) {
+            query = query.lte("last_contacted", toDateEnd(filters.lastContactedTo));
+          }
+
+          if (filters.createdFrom) {
+            query = query.gte("created", toDateStart(filters.createdFrom));
+          }
+
+          if (filters.createdTo) {
+            query = query.lte("created", toDateEnd(filters.createdTo));
+          }
+
+          if (filters.updatedFrom) {
+            query = query.gte("updated", toDateStart(filters.updatedFrom));
+          }
+
+          if (filters.updatedTo) {
+            query = query.lte("updated", toDateEnd(filters.updatedTo));
+          }
+        }
+
+        // Apply sorting
+        query = query.order(sortBy, { ascending: sortDirection === "asc" });
+
+        const { data, error } = await query;
+        if (error) throw error;
+        exportMembers = (data as School[]) || [];
       }
 
       const rows = exportMembers.map((member) => ({

@@ -14,7 +14,8 @@ import {
   FileText,
   FolderOpen,
 } from "lucide-react";
-import { pb } from "@/lib/pocketbase";
+import { supabase } from "@/lib/supabase";
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 
 const sidebarItems = [
@@ -60,7 +61,40 @@ const sidebarItems = [
 export function Sidebar({ className }: { className?: string }) {
   const pathname = usePathname();
   const isSettingsActive = pathname.startsWith("/settings");
-  const user = pb.authStore.model as { name?: string; email?: string } | null;
+  const [user, setUser] = useState<{ name?: string; email?: string } | null>(null);
+
+  useEffect(() => {
+    const getUser = async () => {
+      const {
+        data: { user: authUser },
+      } = await supabase.auth.getUser();
+      if (authUser) {
+        setUser({
+          name: authUser.user_metadata?.name || authUser.email || undefined,
+          email: authUser.email || undefined,
+        });
+      }
+    };
+    getUser();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        setUser({
+          name: session.user.user_metadata?.name || session.user.email || undefined,
+          email: session.user.email || undefined,
+        });
+      } else {
+        setUser(null);
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
+
   const displayName =
     user?.name?.trim() || user?.email?.trim() || "Profil";
   const emailLabel = user?.email?.trim() || "keine E-Mail";
@@ -77,7 +111,7 @@ export function Sidebar({ className }: { className?: string }) {
       <div className="flex h-14 items-center border-b px-4">
         <Link href="/members/active" className="flex items-center gap-2 font-bold text-lg">
           <LayoutDashboard className="h-6 w-6" />
-          <span>Admin Panel</span>
+          <span>Botschafter Panel</span>
         </Link>
       </div>
       <div className="flex-1 overflow-auto py-4">
@@ -152,8 +186,8 @@ export function Sidebar({ className }: { className?: string }) {
           Einstellungen
         </Link>
         <button
-          onClick={() => {
-            pb.authStore.clear();
+          onClick={async () => {
+            await supabase.auth.signOut();
             window.location.href = "/login";
           }}
           className="mt-0 flex w-full items-center gap-3 rounded-lg px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"

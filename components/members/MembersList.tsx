@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { pb } from "@/lib/pocketbase";
+import { supabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -153,7 +153,7 @@ const parseBoolean = (value: unknown) => {
 };
 
 const isNotFoundError = (error: any) =>
-  error?.status === 404 || error?.data?.code === 404;
+  error?.code === "PGRST116" || error?.status === 404;
 
 const formatTimestamp = (value: string) => {
   const date = new Date(value);
@@ -336,78 +336,75 @@ export function MembersList({
     Boolean(filters.updatedTo),
   ].filter(Boolean).length;
 
-  const buildFilterString = (state: FilterState, query: string) => {
-    const filterParts: string[] = [];
-
-    if (query.trim()) {
-      const escapedQuery = escapeFilterValue(query.trim());
-      filterParts.push(
-        `(name ~ "${escapedQuery}" || email ~ "${escapedQuery}" || phone ~ "${escapedQuery}" || city ~ "${escapedQuery}")`
-      );
-    }
-
-    if (state.active !== "all") {
-      filterParts.push(`active = ${state.active === "active"}`);
-    }
-
-    if (state.name.trim()) {
-      filterParts.push(`name ~ "${escapeFilterValue(state.name.trim())}"`);
-    }
-
-    if (state.email.trim()) {
-      filterParts.push(`email ~ "${escapeFilterValue(state.email.trim())}"`);
-    }
-
-    if (state.phone.trim()) {
-      filterParts.push(`phone ~ "${escapeFilterValue(state.phone.trim())}"`);
-    }
-
-    if (state.city.trim()) {
-      filterParts.push(`city ~ "${escapeFilterValue(state.city.trim())}"`);
-    }
-
-    const minId = Number(state.identificationMin);
-    if (!Number.isNaN(minId) && state.identificationMin.trim() !== "") {
-      filterParts.push(`identification >= ${minId}`);
-    }
-
-    const maxId = Number(state.identificationMax);
-    if (!Number.isNaN(maxId) && state.identificationMax.trim() !== "") {
-      filterParts.push(`identification <= ${maxId}`);
-    }
-
-    if (state.createdFrom) {
-      filterParts.push(`created >= "${toDateStart(state.createdFrom)}"`);
-    }
-
-    if (state.createdTo) {
-      filterParts.push(`created <= "${toDateEnd(state.createdTo)}"`);
-    }
-
-    if (state.updatedFrom) {
-      filterParts.push(`updated >= "${toDateStart(state.updatedFrom)}"`);
-    }
-
-    if (state.updatedTo) {
-      filterParts.push(`updated <= "${toDateEnd(state.updatedTo)}"`);
-    }
-
-    return filterParts.join(" && ");
-  };
-
-  const buildSortString = () =>
-    sortDirection === "desc" ? `-${sortBy}` : sortBy;
-
   const fetchMembers = async () => {
     setLoading(true);
     try {
-      const filterString = buildFilterString(filters, searchQuery);
-      const sortString = buildSortString();
-      const records = await pb.collection("members").getList<Member>(1, 50, {
-        sort: sortString,
-        filter: filterString,
-      });
-      setMembers(records.items);
+      let query = supabase.from("members").select("*");
+
+      // Apply search query
+      if (searchQuery.trim()) {
+        query = query.or(
+          `name.ilike.%${searchQuery.trim()}%,email.ilike.%${searchQuery.trim()}%,phone.ilike.%${searchQuery.trim()}%,city.ilike.%${searchQuery.trim()}%`
+        );
+      }
+
+      // Apply filters
+      if (filters.active !== "all") {
+        query = query.eq("active", filters.active === "active");
+      }
+
+      if (filters.name.trim()) {
+        query = query.ilike("name", `%${filters.name.trim()}%`);
+      }
+
+      if (filters.email.trim()) {
+        query = query.ilike("email", `%${filters.email.trim()}%`);
+      }
+
+      if (filters.phone.trim()) {
+        query = query.ilike("phone", `%${filters.phone.trim()}%`);
+      }
+
+      if (filters.city.trim()) {
+        query = query.ilike("city", `%${filters.city.trim()}%`);
+      }
+
+      const minId = Number(filters.identificationMin);
+      if (!Number.isNaN(minId) && filters.identificationMin.trim() !== "") {
+        query = query.gte("identification", minId);
+      }
+
+      const maxId = Number(filters.identificationMax);
+      if (!Number.isNaN(maxId) && filters.identificationMax.trim() !== "") {
+        query = query.lte("identification", maxId);
+      }
+
+      if (filters.createdFrom) {
+        query = query.gte("created", toDateStart(filters.createdFrom));
+      }
+
+      if (filters.createdTo) {
+        query = query.lte("created", toDateEnd(filters.createdTo));
+      }
+
+      if (filters.updatedFrom) {
+        query = query.gte("updated", toDateStart(filters.updatedFrom));
+      }
+
+      if (filters.updatedTo) {
+        query = query.lte("updated", toDateEnd(filters.updatedTo));
+      }
+
+      // Apply sorting
+      query = query.order(sortBy, { ascending: sortDirection === "asc" });
+
+      // Apply pagination
+      query = query.range(0, 49);
+
+      const { data, error } = await query;
+
+      if (error) throw error;
+      setMembers((data as Member[]) || []);
       setSelectedIds([]);
     } catch (error) {
       console.error("Error fetching members:", error);
@@ -452,26 +449,31 @@ export function MembersList({
   const handleSave = async () => {
     try {
       if (editingMember) {
-        await pb.collection("members").update(editingMember.id, formData);
+        const { error } = await supabase
+          .from("members")
+          .update(formData)
+          .eq("id", editingMember.id);
+        if (error) throw error;
       } else {
         let nextId = 1;
         try {
-          const lastMemberResult = await pb
-            .collection("members")
-            .getList(1, 1, {
-              sort: "-identification",
-            });
-          if (lastMemberResult.items.length > 0) {
-            nextId = (lastMemberResult.items[0].identification || 0) + 1;
+          const { data: lastMemberResult } = await supabase
+            .from("members")
+            .select("identification")
+            .order("identification", { ascending: false })
+            .limit(1);
+          if (lastMemberResult && lastMemberResult.length > 0) {
+            nextId = (lastMemberResult[0].identification || 0) + 1;
           }
         } catch (error) {
           console.warn("Could not fetch last ID, defaulting to 1", error);
         }
 
-        await pb.collection("members").create({
+        const { error } = await supabase.from("members").insert({
           ...formData,
           identification: nextId,
         });
+        if (error) throw error;
       }
       setIsAddOpen(false);
       setEditingMember(null);
@@ -486,7 +488,8 @@ export function MembersList({
   const handleDelete = async (id: string) => {
     if (!confirm("Moechtest du diesen Botschafter wirklich loeschen?")) return;
     try {
-      await pb.collection("members").delete(id);
+      const { error } = await supabase.from("members").delete().eq("id", id);
+      if (error) throw error;
       fetchMembers();
     } catch (error) {
       console.error("Error deleting member:", error);
@@ -495,9 +498,11 @@ export function MembersList({
 
   const handleToggleActive = async (member: Member) => {
     try {
-      await pb
-        .collection("members")
-        .update(member.id, { active: !member.active });
+      const { error } = await supabase
+        .from("members")
+        .update({ active: !member.active })
+        .eq("id", member.id);
+      if (error) throw error;
       fetchMembers();
     } catch (error) {
       console.error("Error updating status:", error);
@@ -506,7 +511,11 @@ export function MembersList({
 
   const handleVerifyMember = async (member: Member) => {
     try {
-      await pb.collection("members").update(member.id, { active: true });
+      const { error } = await supabase
+        .from("members")
+        .update({ active: true })
+        .eq("id", member.id);
+      if (error) throw error;
       fetchMembers();
     } catch (error) {
       console.error("Error verifying member:", error);
@@ -548,9 +557,11 @@ export function MembersList({
         : ({ [bulkField]: bulkValue } as Partial<Member>);
 
     try {
-      for (const id of selectedIds) {
-        await pb.collection("members").update(id, payload);
-      }
+      const { error } = await supabase
+        .from("members")
+        .update(payload)
+        .in("id", selectedIds);
+      if (error) throw error;
       setIsBulkEditOpen(false);
       setBulkValue("");
       fetchMembers();
@@ -571,9 +582,11 @@ export function MembersList({
       return;
     setBulkWorking(true);
     try {
-      for (const id of selectedIds) {
-        await pb.collection("members").delete(id);
-      }
+      const { error } = await supabase
+        .from("members")
+        .delete()
+        .in("id", selectedIds);
+      if (error) throw error;
       fetchMembers();
     } catch (error) {
       console.error("Error bulk deleting members:", error);
@@ -669,10 +682,11 @@ export function MembersList({
 
         try {
           if (importMode === "create") {
-            await pb.collection("members").create({
+            const { error } = await supabase.from("members").insert({
               ...payload,
               active: payload.active ?? true,
             });
+            if (error) throw error;
             summary.created += 1;
             continue;
           }
@@ -683,22 +697,38 @@ export function MembersList({
               summary.failed += 1;
               continue;
             }
-            try {
-              const existing = await pb
-                .collection("members")
-                .getFirstListItem(`email = "${escapeFilterValue(email)}"`);
-              await pb.collection("members").update(existing.id, payload);
-              summary.updated += 1;
-            } catch (error: any) {
-              if (isNotFoundError(error)) {
-                await pb.collection("members").create({
-                  ...payload,
-                  email,
-                  active: payload.active ?? true,
-                });
-                summary.created += 1;
-              } else {
+            const { data: existingData, error: fetchError } = await supabase
+              .from("members")
+              .select("id")
+              .eq("email", email)
+              .limit(1)
+              .single();
+            
+            if (fetchError && fetchError.code !== "PGRST116") {
+              summary.failed += 1;
+              continue;
+            }
+
+            if (existingData) {
+              const { error } = await supabase
+                .from("members")
+                .update(payload)
+                .eq("id", existingData.id);
+              if (error) {
                 summary.failed += 1;
+              } else {
+                summary.updated += 1;
+              }
+            } else {
+              const { error } = await supabase.from("members").insert({
+                ...payload,
+                email,
+                active: payload.active ?? true,
+              });
+              if (error) {
+                summary.failed += 1;
+              } else {
+                summary.created += 1;
               }
             }
             continue;
@@ -711,22 +741,38 @@ export function MembersList({
               summary.failed += 1;
               continue;
             }
-            try {
-              const existing = await pb
-                .collection("members")
-                .getFirstListItem(`identification = ${parsedId}`);
-              await pb.collection("members").update(existing.id, payload);
-              summary.updated += 1;
-            } catch (error: any) {
-              if (isNotFoundError(error)) {
-                await pb.collection("members").create({
-                  ...payload,
-                  identification: parsedId,
-                  active: payload.active ?? true,
-                });
-                summary.created += 1;
-              } else {
+            const { data: existingData, error: fetchError } = await supabase
+              .from("members")
+              .select("id")
+              .eq("identification", parsedId)
+              .limit(1)
+              .single();
+            
+            if (fetchError && fetchError.code !== "PGRST116") {
+              summary.failed += 1;
+              continue;
+            }
+
+            if (existingData) {
+              const { error } = await supabase
+                .from("members")
+                .update(payload)
+                .eq("id", existingData.id);
+              if (error) {
                 summary.failed += 1;
+              } else {
+                summary.updated += 1;
+              }
+            } else {
+              const { error } = await supabase.from("members").insert({
+                ...payload,
+                identification: parsedId,
+                active: payload.active ?? true,
+              });
+              if (error) {
+                summary.failed += 1;
+              } else {
+                summary.created += 1;
               }
             }
             continue;
@@ -755,15 +801,70 @@ export function MembersList({
         exportMembers = members.filter((member) =>
           selectedIds.includes(member.id)
         );
-      } else if (exportScope === "filtered") {
-        exportMembers = await pb.collection("members").getFullList<Member>({
-          filter: buildFilterString(filters, searchQuery),
-          sort: buildSortString(),
-        });
       } else {
-        exportMembers = await pb.collection("members").getFullList<Member>({
-          sort: buildSortString(),
-        });
+        let query = supabase.from("members").select("*");
+
+        // Apply filters for filtered scope
+        if (exportScope === "filtered") {
+          if (searchQuery.trim()) {
+            query = query.or(
+              `name.ilike.%${searchQuery.trim()}%,email.ilike.%${searchQuery.trim()}%,phone.ilike.%${searchQuery.trim()}%,city.ilike.%${searchQuery.trim()}%`
+            );
+          }
+
+          if (filters.active !== "all") {
+            query = query.eq("active", filters.active === "active");
+          }
+
+          if (filters.name.trim()) {
+            query = query.ilike("name", `%${filters.name.trim()}%`);
+          }
+
+          if (filters.email.trim()) {
+            query = query.ilike("email", `%${filters.email.trim()}%`);
+          }
+
+          if (filters.phone.trim()) {
+            query = query.ilike("phone", `%${filters.phone.trim()}%`);
+          }
+
+          if (filters.city.trim()) {
+            query = query.ilike("city", `%${filters.city.trim()}%`);
+          }
+
+          const minId = Number(filters.identificationMin);
+          if (!Number.isNaN(minId) && filters.identificationMin.trim() !== "") {
+            query = query.gte("identification", minId);
+          }
+
+          const maxId = Number(filters.identificationMax);
+          if (!Number.isNaN(maxId) && filters.identificationMax.trim() !== "") {
+            query = query.lte("identification", maxId);
+          }
+
+          if (filters.createdFrom) {
+            query = query.gte("created", toDateStart(filters.createdFrom));
+          }
+
+          if (filters.createdTo) {
+            query = query.lte("created", toDateEnd(filters.createdTo));
+          }
+
+          if (filters.updatedFrom) {
+            query = query.gte("updated", toDateStart(filters.updatedFrom));
+          }
+
+          if (filters.updatedTo) {
+            query = query.lte("updated", toDateEnd(filters.updatedTo));
+          }
+        }
+
+        // Apply sorting
+        query = query.order(sortBy, { ascending: sortDirection === "asc" });
+
+        const { data, error } = await query;
+        if (error) throw error;
+        exportMembers = (data as Member[]) || [];
       }
 
       const rows = exportMembers.map((member) => ({

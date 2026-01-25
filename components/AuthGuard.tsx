@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { pb } from "@/lib/pocketbase";
+import { supabase } from "@/lib/supabase";
 import { Loader2 } from "lucide-react";
 
 export default function AuthGuard({ children }: { children: React.ReactNode }) {
@@ -10,11 +10,12 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    const checkAuth = () => {
-      // Check if the user is valid
-      const isValid = pb.authStore.isValid;
+    const checkAuth = async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
       
-      if (!isValid) {
+      if (!session) {
         // Not logged in, redirect
         router.push("/login");
       } else {
@@ -26,7 +27,20 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     // Run check immediately
     checkAuth();
 
-    // Ideally, we could listen to auth changes, but for a simple guard, checking on mount is usually sufficient for client-side protection.
+    // Listen for auth changes
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session) {
+        router.push("/login");
+      } else {
+        setIsLoading(false);
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
   }, [router]);
 
   if (isLoading) {
